@@ -1,0 +1,176 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================
+    // UTILITY FUNCTIONS
+    // ============================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    // ============================================
+    // USERS COLLECTION
+    // ============================================
+    match /users/{userId} {
+      // Users can read their own profile
+      allow read: if isOwner(userId);
+
+      // Admins can read all users
+      allow read: if isAdmin();
+
+      // Users can update their own profile
+      allow update: if isOwner(userId);
+
+      // Users can create their own account
+      allow create: if isOwner(userId);
+
+      // No deletion (soft delete only)
+      allow delete: if false;
+    }
+
+    // ============================================
+    // PROPERTIES COLLECTION
+    // ============================================
+    match /properties/{propertyId} {
+      // Anyone logged in can read properties
+      allow read: if isSignedIn();
+
+      // Anyone can read publicly (for marketplace)
+      allow read: if !isSignedIn();
+
+      // Only property owner can create
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+
+      // Only owner can update their property
+      allow update: if isOwner(resource.data.userId)
+        && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['views'])
+          || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['savesCount'])
+          || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likesCount'])
+          || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['featured'])
+          || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['available']));
+
+      // Admins can verify properties
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['verified', 'verifiedAt', 'verifiedBy']);
+
+      // Only owner can delete
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // ============================================
+    // PAYMENTS COLLECTION (CRITICAL SECURITY)
+    // ============================================
+    match /payments/{paymentId} {
+      // Users can only read their own payments
+      allow read: if isOwner(resource.data.userId);
+
+      // Admins can read all payments
+      allow read: if isAdmin();
+
+      // 🔒 CRITICAL: Block all client-side writes
+      // Only backend API (with verification) can write via admin SDK
+      allow write: if false;
+
+      // Note: Backend uses admin SDK with HMAC signature verification
+    }
+
+    // ============================================
+    // UNLOCKS COLLECTION (VERIFIED UNLOCKS)
+    // ============================================
+    match /unlocks/{unlockId} {
+      // Users can read their own unlocks
+      allow read: if isOwner(resource.data.userId);
+
+      // Admins can read all unlocks
+      allow read: if isAdmin();
+
+      // 🔒 CRITICAL: Only backend can write
+      allow write: if false;
+    }
+
+    // ============================================
+    // SAVES COLLECTION (WISHLIST)
+    // ============================================
+    match /saves/{saveId} {
+      // Users can read their own saves
+      allow read: if isOwner(resource.data.userId);
+
+      // Users can create saves
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+
+      // Users can delete their saves
+      allow delete: if isOwner(resource.data.userId);
+
+      // No updates
+      allow update: if false;
+    }
+
+    // ============================================
+    // LIKES COLLECTION (FAVORITES)
+    // ============================================
+    match /likes/{likeId} {
+      // Users can read their own likes
+      allow read: if isOwner(resource.data.userId);
+
+      // Users can create likes
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+
+      // Users can delete likes
+      allow delete: if isOwner(resource.data.userId);
+
+      // No updates
+      allow update: if false;
+    }
+
+    // ============================================
+    // VENUES COLLECTION (Slot system)
+    // ============================================
+    match /venues/{venueId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isOwner(resource.data.ownerId) || isAdmin();
+      allow delete: if isOwner(resource.data.ownerId) || isAdmin();
+    }
+
+    // ============================================
+    // BOOKINGS COLLECTION (Slot reservations)
+    // ============================================
+    match /bookings/{bookingId} {
+      // Anyone can read bookings (for calendar/availability)
+      allow read: if isSignedIn();
+
+      // Users can create their own bookings
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+
+      // Only admin can update (mark settled, etc.)
+      allow update: if isAdmin();
+
+      // No deletion
+      allow delete: if false;
+    }
+
+    // ============================================
+    // DEFAULT DENY - SECURITY FIRST
+    // ============================================
+    // Anything not explicitly allowed is denied
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
