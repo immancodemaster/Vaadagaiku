@@ -84,6 +84,7 @@ export default function PaymentModal({ property, onClose, onSuccess }: Props) {
       if (!res.ok) throw new Error('Failed to create order');
       const { orderId } = await res.json();
 
+      // Razorpay configuration (using backend verification for security)
       const options: RazorpayOptions = {
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID!,
         amount: 5000,
@@ -94,7 +95,7 @@ export default function PaymentModal({ property, onClose, onSuccess }: Props) {
         handler: async (response: RazorpayResponse) => {
           try {
             // ✅ SECURITY FIX: Call backend verification endpoint
-            // This verifies the signature using server-side secret key
+            // Backend verifies payment via Razorpay using server-side RAZORPAY_KEY_SECRET
             // Never trust client-side payment verification
             const verifyRes = await fetch('/api/razorpay/verify-unlock', {
               method: 'POST',
@@ -117,7 +118,7 @@ export default function PaymentModal({ property, onClose, onSuccess }: Props) {
             const verifyData = await verifyRes.json();
 
             if (verifyData.success && verifyData.contact) {
-              // ✅ Backend already recorded payment & unlock
+              // ✅ Backend already verified payment & recorded unlock
               // Frontend just displays the unlocked contact
               onSuccess(verifyData.contact.phone, verifyData.contact.address);
             } else {
